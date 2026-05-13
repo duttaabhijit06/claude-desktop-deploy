@@ -1,0 +1,17 @@
+{
+  "inferenceProvider": "bedrock",
+  "inferenceBedrockRegion": "us-east-1",
+
+  "inferenceBedrockSsoStartUrl": "{{SSO_START_URL}}",
+  "inferenceBedrockSsoRegion":   "{{SSO_REGION}}",
+  "inferenceBedrockSsoAccountId":"{{ACCOUNT_ID}}",
+  "inferenceBedrockSsoRoleName": "{{ROLE_NAME}}",
+
+  "inferenceModels": [
+    { "name": "global.anthropic.claude-opus-4-7" },
+    { "name": "global.anthropic.claude-sonnet-4-6" },
+    { "name": "global.anthropic.claude-haiku-4-5-20251001-v1:0" }
+  ],
+
+  "deploymentOrganizationUuid": "{{DEPLOYMENT_UUID}}"
+}
