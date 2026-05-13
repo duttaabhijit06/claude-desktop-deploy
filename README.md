@@ -1,6 +1,21 @@
 # Claude Desktop on Bedrock — IT deployment package (in-app SSO)
 
-This package configures Claude Desktop (and Cowork mode, which runs inside Desktop) to send inference to Amazon Bedrock via IAM Identity Center. **Users do not need a terminal, the AWS CLI, or any technical knowledge** — after the patch lands, they open Claude, click **Sign in with AWS SSO**, complete the standard SSO browser flow, and they're done.
+This package configures Claude Desktop (and Cowork mode, which runs inside Desktop) to send inference to Amazon Bedrock via IAM Identity Center. **Users do not need a terminal, the AWS CLI, or any technical knowledge** — after the patch lands, they open Claude, click **Continue with Bedrock** on the launch picker, complete the standard AWS SSO browser flow, and they're done.
+
+> [!IMPORTANT]
+> ## Caveats to share with your customer's IT and security teams
+>
+> 1. **Users will see a "Sign in to Anthropic" option alongside "Continue with Bedrock"** on the launch picker. This option signs them into their *personal* claude.ai account using direct Anthropic inference — **not** your customer's Bedrock account. For organizations with strict data-handling policies, this means a user could route work conversations to Anthropic instead of Bedrock by switching providers. **There is no documented config flag in this package to hide the Anthropic option.** If your customer needs it disabled, raise that requirement with their Anthropic account team.
+>
+> 2. **The provider switch requires sign out → sign in.** The app holds one active provider at a time. There is no in-app toggle that keeps both Bedrock and Anthropic active simultaneously. Switching providers interrupts any in-flight Cowork session.
+>
+> 3. **Conversation history is segregated by provider.** Bedrock-side conversations are governed by the customer's AWS data-retention controls; Anthropic-side conversations live in the user's personal claude.ai history. The two stores never merge.
+>
+> 4. **`skipDangerousModePermissionPrompt` is *not* set by this package** (Claude Desktop has no equivalent today). For Claude Code rollouts to the same laptops, that flag bypasses confirmation prompts for risky agent actions. If your customer ships Claude Code separately, treat that as a deliberate org-wide security posture decision.
+>
+> 5. **The on-disk filename varies by build.** Field testing on the "Cowork 3P" build of Claude Desktop showed the inference config landing at `~/Library/Application Support/Claude/config.json`, not `inference-config.json` as the install scripts currently target. Before customer rollout, confirm the filename matches the build the customer is on by setting up one machine via the GUI and inspecting that directory; update `scripts/install-*.{sh,ps1}` if needed.
+>
+> 6. **AWS account placement matters.** Do not host the Bedrock workload in a Control Tower **Security OU** account (Audit, Log Archive, security tooling). Use a dedicated workload account in a Workloads/Sandbox OU instead. SCPs on the Security OU will likely block Bedrock invocations and mixing end-user activity with SecOps audit accounts violates the OU isolation model.
 
 ## What it ships
 
@@ -9,6 +24,10 @@ claude-desktop-deploy/
 ├── README.md                         # this file
 ├── config/
 │   └── claude-desktop-config.json    # Desktop inference config + embedded SSO fields
+├── images/
+│   ├── provider-picker.png           # "How do you want to use Claude?" screen
+│   ├── aws-sso-signin.png            # AWS Identity Center sign-in page
+│   └── anthropic-signin.png          # Anthropic account sign-in page
 └── scripts/
     ├── install-macos.sh              # run as root
     ├── install-linux.sh              # run as root
@@ -19,7 +38,7 @@ claude-desktop-deploy/
 
 ## How it works
 
-Claude Desktop has built-in AWS SSO support. When the four `inferenceBedrockSso*` fields are present in `inference-config.json`, the Settings → Connection panel shows a **Sign in with AWS SSO** button that drives the entire OAuth device-flow. Tokens cache automatically in the app's profile directory; the app refreshes them on its own. **No `~/.aws/config` or `~/.aws/credentials` is required**, and no AWS CLI install is required.
+Claude Desktop has built-in AWS SSO support. When the four `inferenceBedrockSso*` fields are present in the inference config file (see caveat #5 above for filename), the launch picker shows **Continue with Bedrock** with a **Local configuration** badge. Clicking it drives the entire OAuth device-flow — the app opens AWS Identity Center in a browser, the user signs in with their company SSO credentials, and tokens cache automatically in the app's profile directory. The app refreshes them on its own. **No `~/.aws/config` or `~/.aws/credentials` is required**, and no AWS CLI install is required.
 
 ### End-to-end flow
 
@@ -52,7 +71,7 @@ flowchart TD
 
     subgraph User["4 — End user (first launch)"]
         C1[User opens Claude Desktop]
-        C2[Settings → Connection shows<br/>'Sign in with AWS SSO']
+        C2[Picker shows 'Continue with Bedrock'<br/>with Local configuration badge]
         C3[Browser opens IAM Identity Center]
         C4[User enters SSO credentials,<br/>approves device]
         C5[App caches SSO token<br/>in user profile]
@@ -281,7 +300,7 @@ Detection rule: `C:\Users\<any>\AppData\Roaming\Claude\inference-config.json` ex
 ## Pilot rollout checklist
 
 1. **Pre-flight one machine**: run installer → run `scripts/verify.sh` as the end user → confirm all four SSO fields are filled (no `{{...}}` placeholders left).
-2. **Open Claude Desktop**: Settings → Connection should show Bedrock selected with SSO start URL populated. Click **Sign in with AWS SSO**, complete the browser flow, send a test message.
+2. **Open Claude Desktop**: launch picker should show **Continue with Bedrock** with a "Local configuration" badge. Click it, complete the AWS SSO browser flow, send a test message.
 3. **Open Cowork mode** inside Desktop: confirm a simple prompt routes through Bedrock (CloudTrail in the AWS account will show `InvokeModel` calls from the user).
 4. **Pilot 10–20 users** for 3–5 business days. Watch for SSO session expiry — Claude reprompts in-app when the cached token expires.
 5. **Org-wide** once pilot is clean.
@@ -292,13 +311,100 @@ Detection rule: `C:\Users\<any>\AppData\Roaming\Claude\inference-config.json` ex
 >
 > **First-time setup (takes 30 seconds):**
 > 1. Open Claude.
-> 2. If prompted, click **Sign in with AWS SSO**.
-> 3. A browser window opens — sign in with your usual SSO credentials and approve the request.
-> 4. Return to Claude. You're done.
+> 2. On the **"How do you want to use Claude?"** screen, click **Continue with Bedrock** (the option labeled **Local configuration** — that's the patch IT just pushed).
 >
-> When your SSO session expires (typically every 8–12 hours, set by IT), Claude will reprompt you — just click **Sign in with AWS SSO** again.
+>    ![Provider picker on first launch](images/provider-picker.png)
+>
+> 3. The app opens the AWS sign-in page. Sign in with your usual company SSO credentials and approve the request.
+>
+>    ![AWS SSO sign-in](images/aws-sso-signin.png)
+>
+> 4. Return to Claude. You're done — Cowork and Code are now routed through the company's Bedrock account.
+>
+> When your SSO session expires (typically every 8–12 hours, set by IT), Claude reprompts you — just click **Continue with Bedrock** again.
 
-That's it. No terminal, no commands, no AWS CLI install.
+### Switching between Bedrock (work) and Anthropic chat (personal)
+
+The app's sign-in screen shows two options side-by-side: **Continue with Bedrock** (your company's account) and **Sign in to Anthropic** (your personal Claude account on claude.ai). You can switch between them at any time:
+
+1. **File menu → Sign out** (or click your profile icon → Sign out).
+2. The "How do you want to use Claude?" picker reappears.
+3. Pick the other option and sign in.
+
+If you pick **Sign in to Anthropic**, the app shows the standard Claude account sign-in (Continue with Google or email). There's also an "Or continue with Bedrock" link if you change your mind.
+
+![Anthropic account sign-in](images/anthropic-signin.png)
+
+The two sides use unrelated identities — Bedrock uses the company's AWS SSO, Anthropic uses the user's personal claude.ai account. **For company work, stay on Bedrock.** Use the Anthropic side only for personal use, where company policy permits. (See caveats #1–3 at the top of this README for the underlying constraints.)
+
+### IT requirements to enable this picker
+
+The picker appears automatically once a config file is present in `~/Library/Application Support/Claude/` (macOS) or the equivalent on Windows/Linux — i.e. once the patch in this package has run. **No additional configuration is needed** to expose the Anthropic option; it's a built-in feature of the desktop app, available to any user with a personal Claude account. (Compliance implications: see caveat #1 at the top of this README.)
+
+## Disabling Claude Cowork and Chat at the organization level
+
+If your customer's security or compliance posture requires disabling Claude Cowork or Chat capabilities entirely (rather than relying on users to stay on Bedrock), administrators can control this at the organization level.
+
+### Disabling Cowork (Claude Desktop)
+
+Cowork is enabled by default when the research preview launches, but organization owners can disable it for all users:
+
+1. Log in to the Team or Enterprise organization as an **Owner** or **Primary Owner**.
+2. Navigate to **Organization settings → Capabilities**.
+3. Locate the **Cowork** toggle.
+4. Toggle **off** to disable Cowork for all users in the organization.
+
+> **Note:** This is an organization-wide setting. Granular controls by user or role are not currently available on Team plans. On Enterprise plans, admins can use groups and custom roles to selectively enable Cowork for specific users or teams.
+
+**Plugins** are controlled by the same admin toggle — there is no separate setting to manage plugin access within Cowork.
+
+**Important compliance limitation:** Cowork activity is **not** captured in Audit Logs, Compliance API, or Data Exports. If your customer requires audit trails for compliance purposes, do not enable Cowork for regulated workloads. Conversation history is stored locally on users' computers and cannot be centrally managed or exported by admins.
+
+For monitoring, Team and Enterprise owners can stream Cowork events to SIEM and observability tools through **OpenTelemetry** (tool calls, file access, human approval decisions), though this does not replace audit logging for compliance purposes.
+
+### Disabling web search
+
+Team or Enterprise plan owners can turn off **web search** for Cowork and Chat in **Organization settings → Capabilities**. Note that network egress permissions do not apply to the web fetch/search tools or MCPs — web search must be disabled separately via this toggle.
+
+### Network access controls
+
+Cowork respects the organization's network egress permissions configured in **Organization settings → Capabilities** under **Code execution**. However, network settings are applied only when a new Cowork session is created — changes made while a conversation is active will not take effect until the user starts a new conversation.
+
+### Disabling Claude Code features (if also deployed)
+
+If your customer also deploys Claude Code alongside Claude Desktop, administrators can enforce organization-wide policy through **managed settings**. Claude Code looks for managed settings in this priority order:
+
+| Mechanism | Delivery | Priority |
+|---|---|---|
+| Server-managed | Claude.ai admin console | Highest |
+| plist / registry | macOS: `com.anthropic.claudecode` plist; Windows: `HKLM\SOFTWARE\Policies\ClaudeCode` | High |
+| File-based | macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`; Linux/WSL: `/etc/claude-code/managed-settings.json`; Windows: `C:\Program Files\ClaudeCode\managed-settings.json` | Medium |
+
+Key settings for restricting Claude Code capabilities:
+
+```json
+{
+  "permissions": {
+    "deny": ["WebFetch", "Bash(curl *)", "Read(./.env)"]
+  },
+  "disableAgentView": true,
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": ["github.com", "*.npmjs.org"]
+    }
+  }
+}
+```
+
+Managed settings **cannot be overridden** by user or project settings. Array settings like `permissions.allow` and `permissions.deny` merge entries from all sources, so developers can extend managed lists but not remove from them.
+
+### References
+
+- [Set up Claude Code for your organization](https://code.claude.com/docs/en/admin-setup) — decision map for administrators covering API providers, managed settings, policy enforcement, and data handling.
+- [Claude Code settings](https://code.claude.com/docs/en/settings) — full reference for every setting key, file location, and precedence rule.
+
+---
 
 ## Rollback
 
