@@ -29,12 +29,11 @@ flowchart TD
     subgraph AWS["1 — AWS setup (one time, in customer account)"]
         Z1[Pick region with<br/>Bedrock + Anthropic models]
         Z2[Enable IAM Identity Center<br/>note start URL + region]
-        Z3[Request Bedrock model access:<br/>Opus 4.7 / Sonnet 4.6 / Haiku 4.5]
-        Z4[Create IDC group<br/>e.g. claude-users]
-        Z5[Create permission set<br/>BedrockInference with<br/>bedrock:InvokeModel*]
-        Z6[Assign group + permission set<br/>to the Bedrock AWS account]
-        Z7[Smoke-test sign-in via<br/>AWS access portal]
-        Z1 --> Z2 --> Z3 --> Z4 --> Z5 --> Z6 --> Z7
+        Z3[Create IDC group<br/>e.g. claude-users]
+        Z4[Create permission set<br/>BedrockInference with<br/>bedrock:InvokeModel*]
+        Z5[Assign group + permission set<br/>to the Bedrock AWS account]
+        Z6[Smoke-test sign-in via<br/>AWS access portal]
+        Z1 --> Z2 --> Z3 --> Z4 --> Z5 --> Z6
     end
 
     subgraph Prep["2 — IT prep (one time)"]
@@ -92,20 +91,7 @@ If the customer hasn't already enabled IAM Identity Center (formerly AWS SSO), d
 
 Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/get-set-up-for-idc.html>
 
-### 2. Request Bedrock model access
-
-Bedrock requires per-account opt-in for each foundation model:
-
-- AWS console → **Amazon Bedrock** → **Model access** → **Modify model access**
-- Request access to each Anthropic Claude model used by the Desktop config:
-  - Claude Opus 4.7
-  - Claude Sonnet 4.6
-  - Claude Haiku 4.5
-- Submit; approval is usually instant for Anthropic models. Status must be **Access granted** before users can invoke.
-
-Docs: <https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html>
-
-### 3. Create the IDC group for Claude users
+### 2. Create the IDC group for Claude users
 
 In Identity Center, group the users who should get Claude access (e.g. `claude-users`):
 
@@ -114,7 +100,7 @@ In Identity Center, group the users who should get Claude access (e.g. `claude-u
 
 Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/addgroups.html>
 
-### 4. Create a least-privilege permission set
+### 3. Create a least-privilege permission set
 
 Don't reuse `AdministratorAccess` for end users — create a Bedrock-only permission set:
 
@@ -154,7 +140,7 @@ Docs:
 - Bedrock IAM actions / resources: <https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrock.html>
 - Inference profiles (cross-region routing): <https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html>
 
-### 5. Assign the group to the AWS account with that permission set
+### 4. Assign the group to the AWS account with that permission set
 
 This is the step that wires everything together:
 
@@ -166,7 +152,7 @@ Identity Center will provision an IAM role in that account behind the scenes (na
 
 Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/useraccess.html>
 
-### 6. Smoke-test from one account
+### 5. Smoke-test from one account
 
 Before pushing to laptops, validate the chain works:
 
@@ -187,8 +173,8 @@ Before pushing to laptops, validate the chain works:
 |---|---|
 | `SSO_START_URL`   | Step 1 — AWS access portal URL |
 | `SSO_REGION`      | Step 1 — Identity Center home region |
-| `ACCOUNT_ID`      | Step 5 — the 12-digit AWS account hosting Bedrock |
-| `ROLE_NAME`       | Step 4 — name of the permission set (e.g. `BedrockInference`) |
+| `ACCOUNT_ID`      | Step 4 — the 12-digit AWS account hosting Bedrock |
+| `ROLE_NAME`       | Step 3 — name of the permission set (e.g. `BedrockInference`) |
 | `DEPLOYMENT_UUID` | Generated below — your unique per-customer ID |
 
 ### Quick AWS-side reference links
