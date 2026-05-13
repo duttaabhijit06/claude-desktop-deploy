@@ -6,15 +6,15 @@ This package configures Claude Desktop (and Cowork mode, which runs inside Deskt
 
 ```
 claude-desktop-deploy/
+├── README.md                         # this file
 ├── config/
 │   └── claude-desktop-config.json    # Desktop inference config + embedded SSO fields
-├── scripts/
-│   ├── install-macos.sh              # run as root
-│   ├── install-linux.sh              # run as root
-│   ├── install-windows.ps1           # run as Administrator / SYSTEM
-│   ├── verify.sh                     # run as the end user
-│   └── uninstall.sh                  # macOS + Linux rollback
-└── docs/README.md
+└── scripts/
+    ├── install-macos.sh              # run as root
+    ├── install-linux.sh              # run as root
+    ├── install-windows.ps1           # run as Administrator / SYSTEM
+    ├── verify.sh                     # run as the end user
+    └── uninstall.sh                  # macOS + Linux rollback
 ```
 
 ## How it works
@@ -24,15 +24,26 @@ Claude Desktop has built-in AWS SSO support. When the four `inferenceBedrockSso*
 ### End-to-end flow
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 70, 'rankSpacing': 90, 'padding': 20}, 'themeVariables': {'fontSize': '18px'}}}%%
 flowchart TD
-    subgraph Prep["1 — IT prep (one time)"]
-        A1[Generate DEPLOYMENT_UUID]
-        A2[Collect IAM Identity Center values:<br/>start URL, region, account ID, role]
-        A3[Create least-privilege permission set:<br/>bedrock:InvokeModel*]
-        A1 --> A2 --> A3
+    subgraph AWS["1 — AWS setup (one time, in customer account)"]
+        Z1[Pick region with<br/>Bedrock + Anthropic models]
+        Z2[Enable IAM Identity Center<br/>note start URL + region]
+        Z3[Request Bedrock model access:<br/>Opus 4.7 / Sonnet 4.6 / Haiku 4.5]
+        Z4[Create IDC group<br/>e.g. claude-users]
+        Z5[Create permission set<br/>BedrockInference with<br/>bedrock:InvokeModel*]
+        Z6[Assign group + permission set<br/>to the Bedrock AWS account]
+        Z7[Smoke-test sign-in via<br/>AWS access portal]
+        Z1 --> Z2 --> Z3 --> Z4 --> Z5 --> Z6 --> Z7
     end
 
-    subgraph Push["2 — Patch push via MDM"]
+    subgraph Prep["2 — IT prep (one time)"]
+        A1[Generate DEPLOYMENT_UUID]
+        A2[Collect IAM Identity Center values:<br/>start URL, region, account ID, role]
+        A1 --> A2
+    end
+
+    subgraph Push["3 — Patch push via MDM"]
         B1[MDM agent runs install-*.sh / .ps1<br/>as root / SYSTEM]
         B2[Script iterates each user profile<br/>on the laptop]
         B3[Substitutes placeholders in template]
@@ -40,7 +51,7 @@ flowchart TD
         B1 --> B2 --> B3 --> B4
     end
 
-    subgraph User["3 — End user (first launch)"]
+    subgraph User["4 — End user (first launch)"]
         C1[User opens Claude Desktop]
         C2[Settings → Connection shows<br/>'Sign in with AWS SSO']
         C3[Browser opens IAM Identity Center]
@@ -49,7 +60,7 @@ flowchart TD
         C1 --> C2 --> C3 --> C4 --> C5
     end
 
-    subgraph Run["4 — Steady-state inference"]
+    subgraph Run["5 — Steady-state inference"]
         D1[User prompts Claude / Cowork]
         D2[App exchanges SSO token →<br/>short-lived AWS credentials]
         D3[InvokeModel call to Bedrock<br/>in customer's AWS account]
@@ -57,11 +68,137 @@ flowchart TD
         D1 --> D2 --> D3 --> D4
     end
 
-    Prep --> Push --> User --> Run
+    AWS --> Prep --> Push --> User --> Run
     D4 -.->|token expires<br/>~8–12h| C2
 ```
 
 The same diagram in plain English: IT preps once, pushes the patch via MDM, each user signs in once via the in-app SSO button, and from then on every prompt routes through the customer's Bedrock account using short-lived credentials. When the SSO session expires (8–12h), the app reprompts for sign-in.
+
+## AWS prerequisites (do these once, in the customer's AWS account)
+
+The Desktop app uses IAM Identity Center for sign-in and Amazon Bedrock for inference. Before you push the laptop patch, the customer's AWS administrator needs to set up Identity Center, request Bedrock model access, define a least-privilege permission set, and assign it to the right group of users. Plan for 30–60 minutes the first time.
+
+### 0. Confirm region
+
+Pick a region where Bedrock supports the Anthropic Claude models you want (e.g. `us-east-1`, `us-west-2`). Use the same region for the inference config (`inferenceBedrockRegion`) and Identity Center if practical. Region availability: <https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html>
+
+### 1. Enable IAM Identity Center
+
+If the customer hasn't already enabled IAM Identity Center (formerly AWS SSO), do it now in the AWS Organizations management account:
+
+- AWS console → **IAM Identity Center** → **Enable**
+- Choose an identity source: built-in directory, an existing AD/LDAP, or an external IdP (Okta, Entra ID, Google, etc.). For external IdPs, configure SAML/SCIM per their docs.
+- Note the **AWS access portal URL** (e.g. `https://d-xxxxxxxxxx.awsapps.com/start`) and the **Identity Center region** — these become `SSO_START_URL` and `SSO_REGION`.
+
+Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/get-set-up-for-idc.html>
+
+### 2. Request Bedrock model access
+
+Bedrock requires per-account opt-in for each foundation model:
+
+- AWS console → **Amazon Bedrock** → **Model access** → **Modify model access**
+- Request access to each Anthropic Claude model used by the Desktop config:
+  - Claude Opus 4.7
+  - Claude Sonnet 4.6
+  - Claude Haiku 4.5
+- Submit; approval is usually instant for Anthropic models. Status must be **Access granted** before users can invoke.
+
+Docs: <https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html>
+
+### 3. Create the IDC group for Claude users
+
+In Identity Center, group the users who should get Claude access (e.g. `claude-users`):
+
+- AWS console → **IAM Identity Center** → **Groups** → **Create group** → name it `claude-users` (or whatever your customer prefers).
+- Add users to the group: **Users** tab → pick existing IDC users (or create them / sync from your IdP) → **Add to group**.
+
+Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/addgroups.html>
+
+### 4. Create a least-privilege permission set
+
+Don't reuse `AdministratorAccess` for end users — create a Bedrock-only permission set:
+
+- AWS console → **IAM Identity Center** → **Permission sets** → **Create permission set** → **Custom permission set**.
+- Name: `BedrockInference` (this becomes `ROLE_NAME` in the install script).
+- Session duration: 8h is a good default; max is 12h. Longer = fewer reprompts for users.
+- Inline policy:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "InvokeAnthropicClaudeOnBedrock",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ],
+        "Resource": [
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7*",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5*",
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7*",
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6*",
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-haiku-4-5*"
+        ]
+      }
+    ]
+  }
+  ```
+
+  The two `Resource` blocks cover both direct foundation-model ARNs and cross-region inference-profile ARNs (which is what `global.anthropic.*` model IDs resolve to). Tighten the `*` regions to a specific region if your customer wants stricter scoping.
+
+Docs:
+- Permission sets: <https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html>
+- Bedrock IAM actions / resources: <https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrock.html>
+- Inference profiles (cross-region routing): <https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html>
+
+### 5. Assign the group to the AWS account with that permission set
+
+This is the step that wires everything together:
+
+- AWS console → **IAM Identity Center** → **AWS accounts** → select the account that has Bedrock enabled (the one whose 12-digit ID becomes `ACCOUNT_ID`).
+- Click **Assign users or groups** → select the `claude-users` group from step 3 → **Next**.
+- Select the `BedrockInference` permission set from step 4 → **Next** → **Submit**.
+
+Identity Center will provision an IAM role in that account behind the scenes (named `AWSReservedSSO_BedrockInference_<hash>`); end users never interact with this directly.
+
+Docs: <https://docs.aws.amazon.com/singlesignon/latest/userguide/useraccess.html>
+
+### 6. Smoke-test from one account
+
+Before pushing to laptops, validate the chain works:
+
+- Open the AWS access portal URL in a browser → sign in as a test user who is in `claude-users` → confirm the target account appears with `BedrockInference` listed → click into it → it should land on the AWS console.
+- Optional CLI test (any developer machine with AWS CLI v2):
+  ```bash
+  aws sso login --profile test
+  aws bedrock-runtime invoke-model \
+    --model-id global.anthropic.claude-haiku-4-5-20251001-v1:0 \
+    --body '{"anthropic_version":"bedrock-2023-05-31","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}' \
+    --content-type application/json --profile test /tmp/out.json && cat /tmp/out.json
+  ```
+  A JSON response means the permission set, model access, and region are all correctly wired.
+
+### Values you now have for the patch
+
+| Patch variable | Source |
+|---|---|
+| `SSO_START_URL`   | Step 1 — AWS access portal URL |
+| `SSO_REGION`      | Step 1 — Identity Center home region |
+| `ACCOUNT_ID`      | Step 5 — the 12-digit AWS account hosting Bedrock |
+| `ROLE_NAME`       | Step 4 — name of the permission set (e.g. `BedrockInference`) |
+| `DEPLOYMENT_UUID` | Generated below — your unique per-customer ID |
+
+### Quick AWS-side reference links
+
+- IAM Identity Center user guide: <https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html>
+- Amazon Bedrock user guide: <https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html>
+- Bedrock pricing (so the customer knows what to budget): <https://aws.amazon.com/bedrock/pricing/>
+- Bedrock CloudTrail / monitoring: <https://docs.aws.amazon.com/bedrock/latest/userguide/logging-using-cloudtrail.html>
+
+---
 
 ## Pre-deployment — generate a deployment UUID
 
